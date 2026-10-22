@@ -1,46 +1,63 @@
 from ultralytics import YOLO
 import cv2
+import time
 
 print("1. 加载模型...")
 model = YOLO("yolov8n.pt")
+print("设备:", next(model.model.parameters()).device)
 
-print("2. 推理图片...")
-# 这一步得到的结果 results 是一堆张量数据，不是画好的图
-results = model("test.jpg")
+print("2. 打开摄像头...")
+cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-print("3. 自己动手画框...")
-# ① 用 OpenCV 重新读取原图（我们要在干净的底图上画）
-img = cv2.imread("test.jpg")
+if not cap.isOpened():
+    print("摄像头打不开！")
+    exit()
 
-# ② 提取第一张图的结果
-result = results[0]
-boxes = result.boxes # 这里面装着所有的检测框、置信度、类别
+cv2.namedWindow("YOLO Video", cv2.WINDOW_NORMAL)
 
-# ③ 遍历每一个检测框
-for box in boxes:
-    # 提取坐标：神经网络吐出的坐标是浮点数（如 102.3），画图需要整数，用 map(int, ...) 转换
-    x1, y1, x2, y2 = map(int, box.xyxy[0])
-    
-    # 提取置信度（0.81之类的）
-    conf = float(box.conf[0])
-    
-    # 提取类别ID（比如 0 代表人，5 代表公交车）
-    cls_id = int(box.cls[0])
-    
-    # 把数字ID翻译成人类能看懂的文字（例如把 5 翻译成 "bus"）
-    class_name = model.names[cls_id]
+prev_time = time.time()
+frame_count = 0
 
-    # 【画框】调用 OpenCV 的画笔：
-    # 参数：原图, 左上角坐标, 右下角坐标, 颜色(紫色BGR), 线宽
-    cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 255), 2)
+fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+out=cv2.VideoWriter('output.mp4',fourcc,20.0,(640,480))
 
-    # 【写字】在框的左上角写标签：
-    label = f"{class_name} {conf:.2f}" 
-    cv2.putText(img, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                0.7, (255, 0, 255), 2)
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
 
-print("4. 展示结果！按任意键关闭。")
-# 此时 img 已经被我们用 OpenCV 画满了框和字
-cv2.imshow("My Own Drawing", img)
-cv2.waitKey(0)
+    # 推理：imgsz=320 是最有效的提速手段
+    results = model(frame, imgsz=320, verbose=False)
+
+    # 画框
+    for box in results[0].boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        conf = float(box.conf[0])
+        cls_id = int(box.cls[0])
+        if cls_id!=0:
+            continue
+        label = f"{model.names[cls_id]} {conf:.2f}"
+        cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 255, 255), 2)
+        cv2.putText(frame, label, (x1, y1 - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 255), 2)
+
+    # FPS：前10帧不显示，避开预热
+    curr_time = time.time()
+    fps = 1 / (curr_time - prev_time)
+    prev_time = curr_time
+    frame_count += 1
+    if frame_count > 10:
+        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+    out.write(frame)
+    cv2.imshow("YOLO Video", frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+h, w = frame.shape[:2]
+print(f"宽={w}, 高={h}")
+cap.release()
+out.release()
 cv2.destroyAllWindows()
